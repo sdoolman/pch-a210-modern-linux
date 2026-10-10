@@ -134,10 +134,29 @@ route add default gw 192.168.1.1 2>/dev/null || true
 dmesg > /tmp/boot_dmesg.txt 2>/dev/null || true
 ifconfig -a > /tmp/boot_ifconfig.txt 2>/dev/null || true
 
+# Setup Dropbear SSH Server (Port 22)
+if [ -x /sbin/dropbear ]; then
+    mkdir -p /etc/dropbear
+    if [ ! -f /etc/dropbear/dropbear_rsa_host_key ] && [ -x /bin/dropbearkey ]; then
+        /bin/dropbearkey -t rsa -f /etc/dropbear/dropbear_rsa_host_key -s 1024 2>/dev/null || true
+    fi
+    /sbin/dropbear -p 22 -B -R 2>/dev/null || true
+fi
+
+# Auto-detect and mount internal SATA hard drive
+mkdir -p /mnt/sata
+for dev in /dev/sda1 /dev/sda /dev/sdb1 /dev/sdb; do
+    if [ -b "$dev" ]; then
+        mount "$dev" /mnt/sata 2>/dev/null && break
+    fi
+done
+
 # Start Telnet on port 23 and 2323, plus emergency raw netcat shell on port 9999
-/bin/busybox telnetd -p 23 -l /bin/sh 2>/dev/null || true
-/bin/busybox telnetd -p 2323 -l /bin/sh 2>/dev/null || true
-/bin/busybox nc -l -p 9999 -e /bin/sh &
+SHELL_BIN="/bin/sh"
+[ -x /bin/bash ] && SHELL_BIN="/bin/bash"
+/bin/busybox telnetd -p 23 -l $SHELL_BIN 2>/dev/null || true
+/bin/busybox telnetd -p 2323 -l $SHELL_BIN 2>/dev/null || true
+/bin/busybox nc -l -p 9999 -e $SHELL_BIN &
 /bin/busybox httpd -p 8080 -h / 2>/dev/null || true
 
 # Launch Standalone Zero-Dependency C Root Daemon if present

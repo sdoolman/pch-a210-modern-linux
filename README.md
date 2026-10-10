@@ -33,6 +33,19 @@ Linux (none) 4.9.0-g3f9893d24f-dirty #81 Fri Oct 9 23:46:46 IDT 2026 mips GNU/Li
 
 ---
 
+## 🍓 Turning your Popcorn Hour into a Micro Utility Station
+
+Instead of just an obsolete video player, you can repurpose the SMP8643 as an always-on, low-power Linux server (like a Raspberry Pi):
+
+| Feature | Description | Status |
+| :--- | :--- | :---: |
+| **🔑 Modern SSH (Port 22)** | **Dropbear SSH server** compiled from source with `musl libc`. Auto-generates host keys on boot with secure key login and passwordless root access. | **Supported** 🟢 |
+| **🐚 True GNU Bash Shell** | Full **GNU Bash 5.2** shell replacing primitive BusyBox ash (tab completion, command history, syntax colors, `.bashrc`). | **Supported** 🟢 |
+| **💾 Internal SATA Storage** | Native **SMP8643 Synopsys DWC SATA + SATA PHY + SCSI disk drivers**, auto-mounting internal 3.5" or 2.5" SATA hard drives and SSDs to `/mnt/sata`. | **Supported** 🟢 |
+| **🧰 Modern Core Suite** | Static **BusyBox 1.36.1**, **Curl 8.7.1**, and **Nano 7.2** compiled from source with `musl`—zero library dependencies. | **Supported** 🟢 |
+
+---
+
 ## 🚀 Quickstart: Boot Modern Linux in 3 Minutes
 
 You do not need to open the case, solder serial headers, or touch NAND flash.
