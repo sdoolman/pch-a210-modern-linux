@@ -143,11 +143,28 @@ if [ -x /sbin/dropbear ]; then
     /sbin/dropbear -p 22 -B -R 2>/dev/null || true
 fi
 
-# Auto-detect and mount internal SATA hard drive
-mkdir -p /mnt/sata
-for dev in /dev/sda1 /dev/sda /dev/sdb1 /dev/sdb; do
+# Auto-detect storage and loopback mount ext4 rootfs image (Android-style zero-format setup)
+mkdir -p /mnt/storage /opt
+for dev in /dev/sda1 /dev/sda2 /dev/sda /dev/sdb1 /dev/sdb; do
     if [ -b "$dev" ]; then
-        mount "$dev" /mnt/sata 2>/dev/null && break
+        if mount -t vfat "$dev" /mnt/storage 2>/dev/null || \
+           mount -t ntfs "$dev" /mnt/storage 2>/dev/null || \
+           mount -t ext4 "$dev" /mnt/storage 2>/dev/null || \
+           mount "$dev" /mnt/storage 2>/dev/null; then
+            
+            # Check for loopback filesystem image (e.g. pch_station.img or station.ext4)
+            for img in /mnt/storage/pch_station.img /mnt/storage/pch_rootfs.img /mnt/storage/station.ext4; do
+                if [ -f "$img" ]; then
+                    if mount -o loop,rw "$img" /opt 2>/dev/null; then
+                        echo "[INIT] Loopback ext4 storage mounted from $img to /opt"
+                        [ -d /opt/bin ] && export PATH=/opt/bin:$PATH
+                        [ -x /opt/init.sh ] && /opt/init.sh &
+                        break
+                    fi
+                fi
+            done
+            break
+        fi
     fi
 done
 

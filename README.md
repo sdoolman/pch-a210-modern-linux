@@ -42,7 +42,18 @@ Instead of just an obsolete video player, you can repurpose the SMP8643 as an al
 | **🔑 Modern SSH (Port 22)** | **Dropbear SSH server** compiled from source with `musl libc`. Auto-generates host keys on boot with secure key login and passwordless root access. | **Supported** 🟢 |
 | **🐚 True GNU Bash Shell** | Full **GNU Bash 5.2** shell replacing primitive BusyBox ash (tab completion, command history, syntax colors, `.bashrc`). | **Supported** 🟢 |
 | **💾 Internal SATA Storage** | Native **SMP8643 Synopsys DWC SATA + SATA PHY + SCSI disk drivers**, auto-mounting internal 3.5" or 2.5" SATA hard drives and SSDs to `/mnt/sata`. | **Supported** 🟢 |
+| **💿 Zero-Format Loopback Storage** | **Android-style loopback ext4 image (`pch_station.img`)**. Copy one file to any FAT32 or NTFS USB drive—no repartitioning or formatting needed! | **Supported** 🟢 |
 | **🧰 Modern Core Suite** | Static **BusyBox 1.36.1**, **Curl 8.7.1**, and **Nano 7.2** compiled from source with `musl`—zero library dependencies. | **Supported** 🟢 |
+
+### 💾 Zero-Format Storage: Use ANY USB Flash Drive (FAT32 or NTFS)
+You do not need to format your USB drive to Linux `ext3` or `ext4`!
+1. Plug your standard FAT32 or NTFS USB drive into your PC.
+2. Generate a 1 GB or 2 GB image file:
+   ```bash
+   python scripts/make_station_image.py --size 1024 --output pch_station.img
+   ```
+3. Copy `pch_station.img` to your USB drive.
+4. Plug it into the Popcorn Hour. On boot, `/init` automatically mounts the USB drive and attaches `pch_station.img` via loopback to `/opt`, providing a full native Linux ext4 filesystem with full permissions, symlinks, and persistence!
 
 ---
 
