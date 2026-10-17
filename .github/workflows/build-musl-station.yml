@@ -23,26 +23,25 @@ jobs:
 
       - name: Install musl MIPSEL Cross-Compiler
         run: |
-          echo "Fetching mipsel-linux-muslsf cross-toolchain..."
-          curl --retry 3 --connect-timeout 10 -sSL https://more.musl.cc/10/x86_64-linux-musl/mipsel-linux-muslsf-cross.tgz -o /tmp/toolchain.tgz || \
-          curl --retry 3 --connect-timeout 10 -sSL https://musl.cc/mipsel-linux-muslsf-cross.tgz -o /tmp/toolchain.tgz
-          sudo tar -xzf /tmp/toolchain.tgz -C /opt
-          echo "/opt/mipsel-linux-muslsf-cross/bin" >> $GITHUB_PATH
+          echo "Fetching mipsel-unknown-linux-muslsf cross-toolchain from GitHub Releases..."
+          curl --retry 3 --connect-timeout 15 -sSL https://github.com/cross-tools/musl-cross/releases/download/20261001/mipsel-unknown-linux-muslsf.tar.xz -o /tmp/toolchain.tar.xz
+          sudo tar -xJf /tmp/toolchain.tar.xz -C /opt
+          echo "/opt/mipsel-unknown-linux-muslsf/bin" >> $GITHUB_PATH
 
       - name: Verify Cross-Compiler
         run: |
-          /opt/mipsel-linux-muslsf-cross/bin/mipsel-linux-muslsf-gcc --version
+          /opt/mipsel-unknown-linux-muslsf/bin/mipsel-unknown-linux-muslsf-gcc --version
 
       - name: Build Dropbear SSH (from source with musl)
         run: |
           mkdir -p /tmp/build && cd /tmp/build
           curl -sSL https://matt.ucc.asn.au/dropbear/releases/dropbear-2024.85.tar.bz2 | tar -xj
           cd dropbear-2024.85
-          ./configure --host=mipsel-linux-muslsf --disable-zlib --enable-static \
-            CC=/opt/mipsel-linux-muslsf-cross/bin/mipsel-linux-muslsf-gcc \
+          ./configure --host=mipsel-unknown-linux-muslsf --disable-zlib --enable-static \
+            CC=/opt/mipsel-unknown-linux-muslsf/bin/mipsel-unknown-linux-muslsf-gcc \
             CFLAGS="-Os -static -no-pie" LDFLAGS="-static -no-pie"
           make -j$(nproc) PROGRAMS="dropbear dropbearkey"
-          /opt/mipsel-linux-muslsf-cross/bin/mipsel-linux-muslsf-strip -s dropbear dropbearkey
+          /opt/mipsel-unknown-linux-muslsf/bin/mipsel-unknown-linux-muslsf-strip -s dropbear dropbearkey
           mkdir -p $GITHUB_WORKSPACE/dist/bin $GITHUB_WORKSPACE/dist/sbin
           cp -f dropbear $GITHUB_WORKSPACE/dist/sbin/dropbear
           cp -f dropbearkey $GITHUB_WORKSPACE/dist/bin/dropbearkey
@@ -53,11 +52,11 @@ jobs:
           cd /tmp/build
           curl -sSL https://ftp.gnu.org/gnu/bash/bash-5.2.tar.gz | tar -xz
           cd bash-5.2
-          ./configure --host=mipsel-linux-muslsf --enable-static-link --without-bash-malloc \
-            CC=/opt/mipsel-linux-muslsf-cross/bin/mipsel-linux-muslsf-gcc \
+          ./configure --host=mipsel-unknown-linux-muslsf --enable-static-link --without-bash-malloc \
+            CC=/opt/mipsel-unknown-linux-muslsf/bin/mipsel-unknown-linux-muslsf-gcc \
             CFLAGS="-Os -static -no-pie" LDFLAGS="-static -no-pie"
           make -j$(nproc)
-          /opt/mipsel-linux-muslsf-cross/bin/mipsel-linux-muslsf-strip -s bash
+          /opt/mipsel-unknown-linux-muslsf/bin/mipsel-unknown-linux-muslsf-strip -s bash
           cp -f bash $GITHUB_WORKSPACE/dist/bin/bash
           file $GITHUB_WORKSPACE/dist/bin/bash
           ls -lh $GITHUB_WORKSPACE/dist/bin/bash
@@ -69,9 +68,9 @@ jobs:
           cd busybox-1.36.1
           make defconfig
           sed -i 's/# CONFIG_STATIC is not set/CONFIG_STATIC=y/' .config
-          make -j$(nproc) CROSS_COMPILE=/opt/mipsel-linux-muslsf-cross/bin/mipsel-linux-muslsf- \
+          make -j$(nproc) CROSS_COMPILE=/opt/mipsel-unknown-linux-muslsf/bin/mipsel-unknown-linux-muslsf- \
             CFLAGS="-Os -static -no-pie" LDFLAGS="-static -no-pie"
-          /opt/mipsel-linux-muslsf-cross/bin/mipsel-linux-muslsf-strip -s busybox
+          /opt/mipsel-unknown-linux-muslsf/bin/mipsel-unknown-linux-muslsf-strip -s busybox
           cp -f busybox $GITHUB_WORKSPACE/dist/bin/busybox
           file $GITHUB_WORKSPACE/dist/bin/busybox
 
