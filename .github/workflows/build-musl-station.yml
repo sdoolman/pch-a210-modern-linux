@@ -23,8 +23,10 @@ jobs:
 
       - name: Install musl MIPSEL Cross-Compiler
         run: |
-          echo "Fetching mipsel-linux-muslsf cross-toolchain from musl.cc..."
-          curl -sSL https://musl.cc/mipsel-linux-muslsf-cross.tgz | sudo tar -xz -C /opt
+          echo "Fetching mipsel-linux-muslsf cross-toolchain..."
+          curl --retry 3 --connect-timeout 10 -sSL https://more.musl.cc/10/x86_64-linux-musl/mipsel-linux-muslsf-cross.tgz -o /tmp/toolchain.tgz || \
+          curl --retry 3 --connect-timeout 10 -sSL https://musl.cc/mipsel-linux-muslsf-cross.tgz -o /tmp/toolchain.tgz
+          sudo tar -xzf /tmp/toolchain.tgz -C /opt
           echo "/opt/mipsel-linux-muslsf-cross/bin" >> $GITHUB_PATH
 
       - name: Verify Cross-Compiler
