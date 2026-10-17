@@ -1,245 +1,88 @@
 #!/bin/sh
-# Direct uncached LRAM (0x00061940 - 0x00061988, 8-byte hardware stride) telemetry writer
-record_silicon_net_telemetry() {
-    # 0x61940: Magic header 0x54454C4D ("TELM")
-    /bin/busybox devmem 0x00061940 32 0x54454C4D 2>/dev/null || true
+# Linux 4.9.0 Minimal Init for Popcorn Hour A-210
 
-    # 0x61948: Carrier (1=up, 0=down)
-    C=$(cat /sys/class/net/eth0/carrier 2>/dev/null)
-    [ "$C" = "1" ] && C_VAL=1 || C_VAL=0
-    /bin/busybox devmem 0x00061948 32 $C_VAL 2>/dev/null || true
+# 1. Mount virtual filesystems
+/bin/busybox mount -t proc none /proc 2>/dev/null || true
+/bin/busybox mount -t sysfs none /sys 2>/dev/null || true
+/bin/busybox mount -t devtmpfs none /dev 2>/dev/null || true
 
-    # 0x61950: Operstate (0x5550="UP", 0x444E="DN")
-    OP=$(cat /sys/class/net/eth0/operstate 2>/dev/null)
-    [ "$OP" = "up" ] && OP_VAL=0x5550 || OP_VAL=0x444E
-    /bin/busybox devmem 0x00061950 32 $OP_VAL 2>/dev/null || true
-
-    # 0x61958: RX packets
-    RX_P=$(cat /sys/class/net/eth0/statistics/rx_packets 2>/dev/null)
-    [ -z "$RX_P" ] && RX_P=0
-    /bin/busybox devmem 0x00061958 32 $RX_P 2>/dev/null || true
-
-    # 0x61960: TX packets
-    TX_P=$(cat /sys/class/net/eth0/statistics/tx_packets 2>/dev/null)
-    [ -z "$TX_P" ] && TX_P=0
-    /bin/busybox devmem 0x00061960 32 $TX_P 2>/dev/null || true
-
-    # 0x61968: RX errors
-    RX_E=$(cat /sys/class/net/eth0/statistics/rx_errors 2>/dev/null)
-    [ -z "$RX_E" ] && RX_E=0
-    /bin/busybox devmem 0x00061968 32 $RX_E 2>/dev/null || true
-
-    # 0x61970: TX errors
-    TX_E=$(cat /sys/class/net/eth0/statistics/tx_errors 2>/dev/null)
-    [ -z "$TX_E" ] && TX_E=0
-    /bin/busybox devmem 0x00061970 32 $TX_E 2>/dev/null || true
-
-    # 0x61978: Speed in Mbps (1000, 100, 10, or 0)
-    SPD=$(cat /sys/class/net/eth0/speed 2>/dev/null)
-    [ -z "$SPD" ] && SPD=0
-    /bin/busybox devmem 0x00061978 32 $SPD 2>/dev/null || true
-
-    # 0x61980: Duplex (1=full, 2=half, 0=other)
-    DPX=$(cat /sys/class/net/eth0/duplex 2>/dev/null)
-    if [ "$DPX" = "full" ]; then DPX_VAL=1; elif [ "$DPX" = "half" ]; then DPX_VAL=2; else DPX_VAL=0; fi
-    /bin/busybox devmem 0x00061980 32 $DPX_VAL 2>/dev/null || true
-
-    # 0x61988: Interrupt count from eth0 / nb8800
-    IRQ_N=$(grep -E 'eth0|nb8800' /proc/interrupts 2>/dev/null | awk '{print $2}')
-    [ -z "$IRQ_N" ] && IRQ_N=0
-    /bin/busybox devmem 0x00061988 32 $IRQ_N 2>/dev/null || true
-}
-
-# Persistent flight recorder: dump dmesg and network status to LRAM 0x00062000 via /bin/write_lram & USB
-dump_flight_recorder() {
-    dmesg > /tmp/boot_dmesg.txt 2>/dev/null || true
-    DIAG_FILE="/tmp/lram_diag.txt"
-    echo "===NET_DIAG===" > "$DIAG_FILE"
-    echo "CARRIER=$(cat /sys/class/net/eth0/carrier 2>/dev/null)" >> "$DIAG_FILE"
-    echo "OPERSTATE=$(cat /sys/class/net/eth0/operstate 2>/dev/null)" >> "$DIAG_FILE"
-    echo "--- IFCONFIG ---" >> "$DIAG_FILE"
-    ifconfig -a >> "$DIAG_FILE" 2>/dev/null || true
-    echo "--- INTERRUPTS ---" >> "$DIAG_FILE"
-    cat /proc/interrupts >> "$DIAG_FILE" 2>/dev/null || true
-    echo "--- DMESG ---" >> "$DIAG_FILE"
-    dmesg | tail -n 80 >> "$DIAG_FILE" 2>/dev/null || true
-
-    # 1. On-chip uncached LRAM flight recorder via mmap at 0x00062000
-    if [ -x /bin/write_lram ]; then
-        /bin/write_lram "$DIAG_FILE" 2>/dev/null || true
-    fi
-
-    # 2. Save to USB storage if present (sda, sda1, sdb, sdb1)
-    for part in /dev/sda1 /dev/sda /dev/sdb1 /dev/sdb; do
-        if [ -b "$part" ]; then
-            mkdir -p /mnt/usb
-            if mount "$part" /mnt/usb 2>/dev/null; then
-                cp -f /tmp/boot_dmesg.txt /mnt/usb/boot_dmesg.txt 2>/dev/null || true
-                cp -f "$DIAG_FILE" /mnt/usb/lram_diag.txt 2>/dev/null || true
-                sync
-                umount /mnt/usb 2>/dev/null || true
-                break
-            fi
-        fi
-    done
-}
-
-# Pet watchdog immediately upon entering /init (refresh 60s lease)
-/bin/busybox devmem 0x1FD04 32 0x00000001 2>/dev/null || true
-/bin/busybox devmem 0x1FD00 32 0x608F3D00 2>/dev/null || true
+# Setup PTY device nodes cleanly
+/bin/busybox mkdir -p /dev/pts
+/bin/busybox mount -t devpts -o gid=5,mode=620,ptmxmode=0666 devpts /dev/pts 2>/dev/null || true
+/bin/busybox chmod 666 /dev/ptmx /dev/null /dev/zero /dev/tty 2>/dev/null || true
 
 /bin/busybox --install -s /bin 2>/dev/null || true
 
-# Milestone: entered /init
-/bin/busybox devmem 0x00061938 32 0xE1E1E1E1 2>/dev/null || true
-
-# Mount virtual filesystems
-mount -t proc none /proc
-mount -t sysfs none /sys
-mount -t devtmpfs none /dev 2>/dev/null || true
-
-# Setup PTY device nodes cleanly
-mkdir -p /dev/pts
-mount -t devpts -o gid=5,mode=620,ptmxmode=0666 devpts /dev/pts 2>/dev/null || true
-rm -f /dev/ptmx
-mknod -m 666 /dev/ptmx c 5 2 2>/dev/null || true
-chmod 666 /dev/ptmx /dev/null /dev/zero /dev/tty 2>/dev/null || true
-
-# Milestone: filesystems & ptys ready
+# Milestone: filesystems ready
 /bin/busybox devmem 0x00061938 32 0xE2E2E2E2 2>/dev/null || true
 
-echo '================================================='
-echo '   POPCORN HOUR A-210 LINUX 4.9.0 IS ALIVE!     '
-echo '================================================='
-
-# Create profile that pets watchdog keepalive on shell session
-mkdir -p /etc
-cat << 'EOF' > /etc/profile
-touch /tmp/keepalive
-echo "=================================================="
-echo " Welcome to Popcorn Hour A-210 (Linux 4.9.0)     "
-echo " Watchdog lease locked (session keepalive active) "
-echo "=================================================="
-EOF
-
-# Setup Network via BusyBox
-ifconfig lo 127.0.0.1 up 2>/dev/null || true
-ifconfig eth0 192.168.1.4 netmask 255.255.255.0 up 2>/dev/null || true
-route add default gw 192.168.1.1 2>/dev/null || true
+# 2. Setup Network
+/bin/busybox ifconfig lo 127.0.0.1 up 2>/dev/null || true
+/bin/busybox ifconfig eth0 192.168.1.4 netmask 255.255.255.0 up 2>/dev/null || true
+/bin/busybox route add default gw 192.168.1.1 2>/dev/null || true
 
 # Milestone: network interface configured
 /bin/busybox devmem 0x00061938 32 0xE3E3E3E3 2>/dev/null || true
 
-# Save diagnostics to /tmp
-dmesg > /tmp/boot_dmesg.txt 2>/dev/null || true
-ifconfig -a > /tmp/boot_ifconfig.txt 2>/dev/null || true
+# 3. Create profile
+/bin/busybox mkdir -p /etc
+cat << 'EOF' > /etc/profile
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+echo "=================================================="
+echo " Welcome to Popcorn Hour A-210 (Linux 4.9.0)     "
+echo " Interactive Modern Root Shell Active             "
+echo "=================================================="
+EOF
 
-# Setup Dropbear SSH Server (Port 22)
-if [ -x /sbin/dropbear ]; then
-    mkdir -p /etc/dropbear
-    if [ ! -f /etc/dropbear/dropbear_rsa_host_key ] && [ -x /bin/dropbearkey ]; then
-        /bin/dropbearkey -t rsa -f /etc/dropbear/dropbear_rsa_host_key -s 1024 2>/dev/null || true
-    fi
-    /sbin/dropbear -p 22 -B -R 2>/dev/null || true
-fi
-
-# Auto-detect storage and loopback mount ext4 rootfs image (Android-style zero-format setup)
-mkdir -p /mnt/storage /opt
-for dev in /dev/sda1 /dev/sda2 /dev/sda /dev/sdb1 /dev/sdb; do
-    if [ -b "$dev" ]; then
-        if mount -t vfat "$dev" /mnt/storage 2>/dev/null || \
-           mount -t ntfs "$dev" /mnt/storage 2>/dev/null || \
-           mount -t ext4 "$dev" /mnt/storage 2>/dev/null || \
-           mount "$dev" /mnt/storage 2>/dev/null; then
-            
-            # Check for loopback filesystem image (e.g. pch_station.img or station.ext4)
-            for img in /mnt/storage/pch_station.img /mnt/storage/pch_rootfs.img /mnt/storage/station.ext4; do
-                if [ -f "$img" ]; then
-                    if mount -o loop,rw "$img" /opt 2>/dev/null; then
-                        echo "[INIT] Loopback ext4 storage mounted from $img to /opt"
-                        [ -d /opt/bin ] && export PATH=/opt/bin:$PATH
-                        [ -x /opt/init.sh ] && /opt/init.sh &
-                        break
-                    fi
-                fi
-            done
-            break
-        fi
-    fi
-done
-
-# Start Telnet on port 23 and 2323, plus emergency raw netcat shell on port 9999
-SHELL_BIN="/bin/sh"
-[ -x /bin/bash ] && SHELL_BIN="/bin/bash"
-/bin/busybox telnetd -p 23 -l $SHELL_BIN 2>/dev/null || true
-/bin/busybox telnetd -p 2323 -l $SHELL_BIN 2>/dev/null || true
-/bin/busybox nc -l -p 9999 -e $SHELL_BIN &
+# 4. Start Daemons: Telnet on port 23 & 2323, netcat on 9999, httpd on 8080
+/bin/busybox telnetd -p 23 -l /bin/sh 2>/dev/null || true
+/bin/busybox telnetd -p 2323 -l /bin/sh 2>/dev/null || true
+/bin/busybox nc -lk -p 9999 -e /bin/sh &
 /bin/busybox httpd -p 8080 -h / 2>/dev/null || true
 
-# Launch Standalone Zero-Dependency C Root Daemon if present
-if [ -x /sbin/init_daemon ]; then
-    /sbin/init_daemon &
-fi
+# 5. Reverse shell to host PC
+(while true; do
+    /bin/busybox nc 192.168.1.238 7777 -e /bin/sh 2>/dev/null || true
+    sleep 2
+done) &
 
 # Milestone: all services launched
 /bin/busybox devmem 0x00061938 32 0xE4E4E4E4 2>/dev/null || true
 
-# Wait for carrier to settle (up to 15 seconds)
-for i in $(seq 1 15); do
-    if [ "$(cat /sys/class/net/eth0/carrier 2>/dev/null)" = "1" ]; then
-        break
-    fi
-    sleep 1
-done
+# 6. Background swap activation (/persistfs/swap4k.img on /dev/sda2)
+(
+    for i in $(seq 1 30); do
+        if [ -b /dev/sda2 ]; then
+            mkdir -p /persistfs
+            if mount /dev/sda2 /persistfs 2>/dev/null; then
+                if [ -f /persistfs/swap4k.img ]; then
+                    mkswap /persistfs/swap4k.img >/dev/null 2>&1 || true
+                    swapon /persistfs/swap4k.img 2>/dev/null || true
+                fi
+            fi
+            break
+        fi
+        sleep 1
+    done
+) &
 
-# Announce Network (Gratuitous ARP & Gateway Ping)
-/bin/busybox arping -c 3 -I eth0 192.168.1.4 2>/dev/null || true
-/bin/busybox ping -c 2 192.168.1.1 2>/dev/null || true
+# 7. Background network announcement
+(
+    sleep 3
+    arping -c 2 -I eth0 192.168.1.4 2>/dev/null || true
+    ping -c 2 192.168.1.1 2>/dev/null || true
+) &
 
-# Persistent flight recorder: dump telemetry after network configuration
-record_silicon_net_telemetry
-dump_flight_recorder
+# Milestone: boot complete, running kernel watchdog keeper
+/bin/busybox devmem 0x00061938 32 0xEEEEEEEE 2>/dev/null || true
 
-# Proactive Reverse Shell to Orchestrator Host (192.168.1.247:7777) looping every 2s
-(while true; do
-    /bin/busybox nc 192.168.1.247 7777 -e /bin/sh 2>/dev/null || true
-    sleep 2
-done) &
-
-# Milestone: network announced, entering watchdog petting loop
-/bin/busybox devmem 0x00061938 32 0xE5E5E5E5 2>/dev/null || true
-
-# Failsafe watchdog petter: pets for 180s unless keepalive is established
-COUNT=0
-while [ $COUNT -lt 36 ]; do
-    if [ -f /tmp/keepalive ]; then
-        COUNT=0
-    fi
-    # Pet hardware watchdog (config: XTAL_IN=1, counter: 90s)
-    /bin/busybox devmem 0x1FD04 32 0x00000001 2>/dev/null || true
-    /bin/busybox devmem 0x1FD00 32 0x608F3D00 2>/dev/null || true
-
-    if [ $((COUNT % 2)) -eq 0 ]; then
-        /bin/busybox arping -c 1 -I eth0 192.168.1.4 2>/dev/null || true
-        /bin/busybox ping -c 1 -W 1 192.168.1.1 2>/dev/null || true
-        record_silicon_net_telemetry
-    fi
-    sleep 5
-    COUNT=$((COUNT + 1))
-done
-
-# Final persistent telemetry dump to DRAM & LRAM before reboot
-record_silicon_net_telemetry
-dump_flight_recorder
-
-echo "Watchdog lease expired! Triggering clean kernel reboot back to stock firmware..."
-sync
-/bin/busybox reboot -f
-# Fallback in case reboot syscall hangs
-/bin/busybox devmem 0x1FD07 8 0x80 2>/dev/null || true
-/bin/busybox devmem 0x1FD04 8 0x01 2>/dev/null || true
-/bin/busybox devmem 0x1FD00 32 2700 2>/dev/null || true
-/bin/busybox devmem 0x1FD07 8 0x00 2>/dev/null || true
-while true; do
-    sleep 1
-done
+# 8. Start watchdog keeper daemon if /dev/watchdog exists
+if [ -c /dev/watchdog ]; then
+    /bin/busybox watchdog -t 5 -T 60 /dev/watchdog
+else
+    while true; do
+        /bin/busybox devmem 0x1FD04 32 0x00000001 2>/dev/null || true
+        /bin/busybox devmem 0x1FD00 32 0x608F3D00 2>/dev/null || true
+        /bin/busybox sleep 5
+    done
+fi

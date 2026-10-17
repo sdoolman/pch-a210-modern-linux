@@ -1,0 +1,94 @@
+path = "/home/stavd/src/initramfs_root/init"
+
+init_code = """#!/bin/sh
+# Linux 4.9.0 Minimal Init for Popcorn Hour A-210
+
+# 1. Mount virtual filesystems
+/bin/busybox mount -t proc none /proc 2>/dev/null || true
+/bin/busybox mount -t sysfs none /sys 2>/dev/null || true
+/bin/busybox mount -t devtmpfs none /dev 2>/dev/null || true
+
+# Setup PTY device nodes cleanly
+/bin/busybox mkdir -p /dev/pts
+/bin/busybox mount -t devpts -o gid=5,mode=620,ptmxmode=0666 devpts /dev/pts 2>/dev/null || true
+/bin/busybox chmod 666 /dev/ptmx /dev/null /dev/zero /dev/tty 2>/dev/null || true
+
+/bin/busybox --install -s /bin 2>/dev/null || true
+
+# Milestone: filesystems ready
+/bin/busybox devmem 0x00061938 32 0xE2E2E2E2 2>/dev/null || true
+
+# 2. Setup Network
+/bin/busybox ifconfig lo 127.0.0.1 up 2>/dev/null || true
+/bin/busybox ifconfig eth0 192.168.1.4 netmask 255.255.255.0 up 2>/dev/null || true
+/bin/busybox route add default gw 192.168.1.1 2>/dev/null || true
+
+# Milestone: network interface configured
+/bin/busybox devmem 0x00061938 32 0xE3E3E3E3 2>/dev/null || true
+
+# 3. Create profile
+/bin/busybox mkdir -p /etc
+cat << 'EOF' > /etc/profile
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+echo "=================================================="
+echo " Welcome to Popcorn Hour A-210 (Linux 4.9.0)     "
+echo " Interactive Modern Root Shell Active             "
+echo "=================================================="
+EOF
+
+# 4. Start Daemons: Telnet on port 23 & 2323, netcat on 9999, httpd on 8080
+/bin/busybox telnetd -p 23 -l /bin/sh 2>/dev/null || true
+/bin/busybox telnetd -p 2323 -l /bin/sh 2>/dev/null || true
+/bin/busybox nc -lk -p 9999 -e /bin/sh &
+/bin/busybox httpd -p 8080 -h / 2>/dev/null || true
+
+# 5. Reverse shell to host PC
+(while true; do
+    /bin/busybox nc 192.168.1.238 7777 -e /bin/sh 2>/dev/null || true
+    sleep 2
+done) &
+
+# Milestone: all services launched
+/bin/busybox devmem 0x00061938 32 0xE4E4E4E4 2>/dev/null || true
+
+# 6. Background swap activation (/persistfs/swap4k.img on /dev/sda2)
+(
+    for i in $(seq 1 30); do
+        if [ -b /dev/sda2 ]; then
+            mkdir -p /persistfs
+            if mount /dev/sda2 /persistfs 2>/dev/null; then
+                if [ -f /persistfs/swap4k.img ]; then
+                    mkswap /persistfs/swap4k.img >/dev/null 2>&1 || true
+                    swapon /persistfs/swap4k.img 2>/dev/null || true
+                fi
+            fi
+            break
+        fi
+        sleep 1
+    done
+) &
+
+# 7. Background network announcement
+(
+    sleep 3
+    arping -c 2 -I eth0 192.168.1.4 2>/dev/null || true
+    ping -c 2 192.168.1.1 2>/dev/null || true
+) &
+
+# Milestone: boot complete, running kernel watchdog keeper
+/bin/busybox devmem 0x00061938 32 0xEEEEEEEE 2>/dev/null || true
+
+# 8. Start watchdog keeper daemon if /dev/watchdog exists
+if [ -c /dev/watchdog ]; then
+    /bin/busybox watchdog -t 5 -T 60 /dev/watchdog
+else
+    while true; do
+        /bin/busybox devmem 0x1FD04 32 0x00000001 2>/dev/null || true
+        /bin/busybox devmem 0x1FD00 32 0x608F3D00 2>/dev/null || true
+        /bin/busybox sleep 5
+    done
+fi
+"""
+
+open(path, "w").write(init_code)
+print("Updated /init with reverse shell and kernel watchdog keeper!")
