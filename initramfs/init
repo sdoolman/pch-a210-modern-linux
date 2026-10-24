@@ -1,88 +1,199 @@
 #!/bin/sh
-# Linux 4.9.0 Minimal Init for Popcorn Hour A-210
+# Linux 4.9.0 Production Init for Popcorn Hour A-210
+
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+
+# 0. Ensure critical device nodes exist immediately
+mkdir -p /dev /proc /sys /etc /tmp /share /dev/pts
+mknod -m 666 /dev/mem c 1 1 2>/dev/null || true
+mknod -m 666 /dev/kmsg c 1 11 2>/dev/null || true
+mknod -m 666 /dev/null c 1 3 2>/dev/null || true
+mknod -m 666 /dev/zero c 1 5 2>/dev/null || true
+mknod -m 666 /dev/tty c 5 0 2>/dev/null || true
+mknod -m 666 /dev/ptmx c 5 2 2>/dev/null || true
+mknod -m 660 /dev/watchdog c 10 130 2>/dev/null || true
+
+# Re-arm hardware watchdog immediately (60s budget with safe positive int)
+devmem 0x1FD04 32 0x80000001 2>/dev/null || true
+devmem 0x1FD00 32 0 2>/dev/null || true
+devmem 0x1FD04 32 0x00000001 2>/dev/null || true
+devmem 0x1FD00 32 0x608F3D00 2>/dev/null || true
+
+# Mark milestone 1
+devmem 0x00061900 32 0xA1100001 2>/dev/null || true
 
 # 1. Mount virtual filesystems
-/bin/busybox mount -t proc none /proc 2>/dev/null || true
-/bin/busybox mount -t sysfs none /sys 2>/dev/null || true
-/bin/busybox mount -t devtmpfs none /dev 2>/dev/null || true
+mount -t proc none /proc 2>/dev/null || true
+mount -t sysfs none /sys 2>/dev/null || true
+mdev -s 2>/dev/null || true
+mount -t devpts -o gid=5,mode=620,ptmxmode=0666 devpts /dev/pts 2>/dev/null || true
+chmod 666 /dev/ptmx 2>/dev/null || true
 
-# Setup PTY device nodes cleanly
-/bin/busybox mkdir -p /dev/pts
-/bin/busybox mount -t devpts -o gid=5,mode=620,ptmxmode=0666 devpts /dev/pts 2>/dev/null || true
-/bin/busybox chmod 666 /dev/ptmx /dev/null /dev/zero /dev/tty 2>/dev/null || true
+# Mark milestone 2: filesystems mounted
+devmem 0x00061900 32 0xA1100002 2>/dev/null || true
 
-/bin/busybox --install -s /bin 2>/dev/null || true
+# 2. Configure Network & Capture Full Diagnostics
+ifconfig lo 127.0.0.1 up 2>/dev/null
+devmem 0x00061904 32 $? 2>/dev/null || true
 
-# Milestone: filesystems ready
-/bin/busybox devmem 0x00061938 32 0xE2E2E2E2 2>/dev/null || true
+ETH_ERR=$(ifconfig eth0 192.168.1.4 netmask 255.255.255.0 up 2>&1)
+RET_ETH0=$?
+devmem 0x00061908 32 $RET_ETH0 2>/dev/null || true
 
-# 2. Setup Network
-/bin/busybox ifconfig lo 127.0.0.1 up 2>/dev/null || true
-/bin/busybox ifconfig eth0 192.168.1.4 netmask 255.255.255.0 up 2>/dev/null || true
-/bin/busybox route add default gw 192.168.1.1 2>/dev/null || true
+ifconfig eth0 promisc 2>/dev/null || true
+route add default gw 192.168.1.1 2>/dev/null
+devmem 0x0006190c 32 $? 2>/dev/null || true
 
-# Milestone: network interface configured
-/bin/busybox devmem 0x00061938 32 0xE3E3E3E3 2>/dev/null || true
+# Static ARP entries for instant direct routing to Host and Gateway
+arp -i eth0 -s 192.168.1.5 d8:f8:83:7b:10:6f 2>/dev/null || true
+arp -i eth0 -s 192.168.1.1 00:f8:cc:c2:2a:ef 2>/dev/null || true
+
+DMESG_ETH=$(dmesg | grep -E -i "eth0|nb8800|phy" | tail -n 2 | tr '\n' ' ')
+NET_DEVS=$(cat /proc/net/dev 2>/dev/null | grep ':' | awk '{print $1}' | tr '\n' ' ')
+
+echo "ETH_RET=$RET_ETH0 ERR=$ETH_ERR | DEVS=$NET_DEVS | KLOG=$DMESG_ETH" > /tmp/boot_diag.txt
+
+# Write diagnostics to LRAM starting at 0x61940 (399680)
+addr=399680
+for w in $(od -t x4 -An /tmp/boot_diag.txt); do
+    devmem $addr 32 0x$w 2>/dev/null || true
+    addr=$((addr + 4))
+    [ $addr -ge 399868 ] && break
+done
 
 # 3. Create profile
-/bin/busybox mkdir -p /etc
-cat << 'EOF' > /etc/profile
+cat << "PCH_PROF" > /etc/profile
 export PATH=/bin:/sbin:/usr/bin:/usr/sbin
 echo "=================================================="
 echo " Welcome to Popcorn Hour A-210 (Linux 4.9.0)     "
 echo " Interactive Modern Root Shell Active             "
 echo "=================================================="
-EOF
+PCH_PROF
 
-# 4. Start Daemons: Telnet on port 23 & 2323, netcat on 9999, httpd on 8080
-/bin/busybox telnetd -p 23 -l /bin/sh 2>/dev/null || true
-/bin/busybox telnetd -p 2323 -l /bin/sh 2>/dev/null || true
-/bin/busybox nc -lk -p 9999 -e /bin/sh &
-/bin/busybox httpd -p 8080 -h / 2>/dev/null || true
+# 4. Start Daemons: SSH on port 22, Telnet on 23 & 2323, netcat on 9999, httpd on 8080
+mkdir -p /var/run /var/log
+/sbin/dropbear -R -B -p 22 2>/tmp/dropbear.log &
+telnetd -p 23 -l /bin/sh &
+telnetd -p 2323 -l /bin/sh &
+nc -lk -p 9999 -e /bin/sh &
+httpd -p 8080 -h / 2>/dev/null || true
 
-# 5. Reverse shell to host PC
+# 5. Reverse shell to host PC (192.168.1.5)
 (while true; do
-    /bin/busybox nc 192.168.1.238 7777 -e /bin/sh 2>/dev/null || true
+    nc 192.168.1.5 7777 -e /bin/sh 2>/dev/null || true
     sleep 2
 done) &
 
-# Milestone: all services launched
-/bin/busybox devmem 0x00061938 32 0xE4E4E4E4 2>/dev/null || true
-
-# 6. Background swap activation (/persistfs/swap4k.img on /dev/sda2)
-(
-    for i in $(seq 1 30); do
-        if [ -b /dev/sda2 ]; then
-            mkdir -p /persistfs
-            if mount /dev/sda2 /persistfs 2>/dev/null; then
-                if [ -f /persistfs/swap4k.img ]; then
-                    mkswap /persistfs/swap4k.img >/dev/null 2>&1 || true
-                    swapon /persistfs/swap4k.img 2>/dev/null || true
-                fi
+# 6. Storage Detection, Swap Activation & Optional System Image Transition
+mkdir -p /share /mnt/station
+USB_MOUNTED=0
+for i in 1 2 3 4 5 6 7 8 9 10; do
+    for d in /dev/sda* /dev/sdb*; do
+        if [ -b "$d" ]; then
+            if mount -t vfat "$d" /share 2>/dev/null || mount -t ext3 "$d" /share 2>/dev/null || mount -t ext4 "$d" /share 2>/dev/null || mount "$d" /share 2>/dev/null; then
+                USB_MOUNTED=1
+                break 2
             fi
+        fi
+    done
+    devmem 0x1FD04 32 0x00000001 2>/dev/null || true
+    devmem 0x1FD00 32 0x608F3D00 2>/dev/null || true
+    sleep 1
+done
+
+if [ "$USB_MOUNTED" -eq 1 ]; then
+    dmesg > /share/k49_dmesg.txt 2>&1
+    echo "=== IFCONFIG ===" >> /share/k49_dmesg.txt
+    ifconfig -a >> /share/k49_dmesg.txt 2>&1
+    echo "=== INTERRUPTS ===" >> /share/k49_dmesg.txt
+    cat /proc/interrupts >> /share/k49_dmesg.txt 2>&1
+    sync
+
+    # Activate 64MB Swap if present
+    if [ -f /share/swap.img ]; then
+        swapon /share/swap.img 2>/dev/null && echo "[+] Swap activated on /share/swap.img" || true
+    fi
+
+    # Check for loopback Station Image
+    if [ -f /share/pch_station.img ]; then
+        [ ! -e /dev/loop0 ] && mknod -m 660 /dev/loop0 b 7 0 2>/dev/null || true
+        if mount -o loop /share/pch_station.img /mnt/station 2>/dev/null; then
+            if [ -x /mnt/station/init ]; then
+                mkdir -p /mnt/station/share
+                mount --move /share /mnt/station/share 2>/dev/null || true
+                echo "[+] Transitioning to persistent Station Image (/mnt/station)..."
+                devmem 0x00061938 32 0xE5E5E5E5 2>/dev/null || true
+                killall dropbear telnetd nc 2>/dev/null || true
+                exec switch_root /mnt/station /init
+            else
+                umount /mnt/station 2>/dev/null || true
+            fi
+        fi
+    fi
+fi
+
+# 7. Background network link monitor and gratuitous ARP
+(
+    i=1
+    while [ $i -le 30 ]; do
+        if [ -f /sys/class/net/eth0/carrier ] && [ "$(cat /sys/class/net/eth0/carrier 2>/dev/null)" = "1" ]; then
             break
         fi
         sleep 1
+        i=$((i+1))
     done
+
+    # Gratuitous ARP to announce MAC address to LAN switch
+    arping -U -c 5 -I eth0 192.168.1.4 2>/dev/null
+    RET_ARP=$?
+    devmem 0x00061934 32 $RET_ARP 2>/dev/null || true
+
+    # Ping host PC
+    ping -c 3 -W 1 192.168.1.5 2>/dev/null
+    RET_PING=$?
+    devmem 0x00061930 32 $RET_PING 2>/dev/null || true
 ) &
 
-# 7. Background network announcement
-(
-    sleep 3
-    arping -c 2 -I eth0 192.168.1.4 2>/dev/null || true
-    ping -c 2 192.168.1.1 2>/dev/null || true
-) &
+# Milestone: boot complete, PID 1 entering supervisor loop
+devmem 0x00061938 32 0xEEEEEEEE 2>/dev/null || true
 
-# Milestone: boot complete, running kernel watchdog keeper
-/bin/busybox devmem 0x00061938 32 0xEEEEEEEE 2>/dev/null || true
+# 8. Supervisor loop: feed hardware watchdog and record hardware state telemetry into LRAM
+# Active for 60 loops (300 seconds = 5 minutes).
+# Hardware watchdog is topped up to 60s (0x608F3D00) every 5 seconds.
+# If kernel hangs/panics, 60s hardware timer triggers clean Yamon warm-reboot.
+loop_count=0
+while true; do
+    if [ $loop_count -lt 60 ]; then
+        devmem 0x1FD04 32 0x80000001 2>/dev/null || true
+        devmem 0x1FD00 32 0 2>/dev/null || true
+        devmem 0x1FD04 32 0x00000001 2>/dev/null || true
+        devmem 0x1FD00 32 0x608F3D00 2>/dev/null || true
+        echo 1 > /dev/watchdog 2>/dev/null || true
+    fi
+    loop_count=$((loop_count + 1))
+    devmem 0x0006191c 32 $loop_count 2>/dev/null || true
 
-# 8. Start watchdog keeper daemon if /dev/watchdog exists
-if [ -c /dev/watchdog ]; then
-    /bin/busybox watchdog -t 5 -T 60 /dev/watchdog
-else
-    while true; do
-        /bin/busybox devmem 0x1FD04 32 0x00000001 2>/dev/null || true
-        /bin/busybox devmem 0x1FD00 32 0x608F3D00 2>/dev/null || true
-        /bin/busybox sleep 5
-    done
-fi
+    CARRIER=$(cat /sys/class/net/eth0/carrier 2>/dev/null || echo 99)
+    devmem 0x00061910 32 ${CARRIER:-99} 2>/dev/null || true
+
+    # Ethernet Interrupts (search for driver node names in /proc/interrupts)
+    IRQ_CNT=$(grep -E "26000|ethernet|nb8800|eth0" /proc/interrupts 2>/dev/null | awk '{print $2}')
+    devmem 0x00061914 32 ${IRQ_CNT:-0} 2>/dev/null || true
+
+    SPEED=$(cat /sys/class/net/eth0/speed 2>/dev/null || echo 0)
+    devmem 0x00061918 32 ${SPEED:-0} 2>/dev/null || true
+
+    RX_PKTS=$(cat /sys/class/net/eth0/statistics/rx_packets 2>/dev/null || echo 0)
+    devmem 0x00061920 32 ${RX_PKTS:-0} 2>/dev/null || true
+
+    TX_PKTS=$(cat /sys/class/net/eth0/statistics/tx_packets 2>/dev/null || echo 0)
+    devmem 0x00061924 32 ${TX_PKTS:-0} 2>/dev/null || true
+
+    MAC_MODE=$(devmem 0x26044 32 2>/dev/null || echo 0)
+    devmem 0x00061928 32 $MAC_MODE 2>/dev/null || true
+
+    PAD_MODE=$(devmem 0x26400 32 2>/dev/null || echo 0)
+    devmem 0x0006192c 32 $PAD_MODE 2>/dev/null || true
+
+    sleep 5
+done

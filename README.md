@@ -38,22 +38,24 @@ Linux (none) 4.9.0-g3f9893d24f-dirty #81 Fri Oct 9 23:46:46 IDT 2026 mips GNU/Li
 Instead of just an obsolete video player, you can repurpose the SMP8643 as an always-on, low-power Linux server (like a Raspberry Pi):
 
 | Feature | Description | Status |
-| :--- | :--- | :---: |
-| **🔑 Modern SSH (Port 22)** | **Dropbear SSH server** compiled from source with `musl libc`. Auto-generates host keys on boot with secure key login and passwordless root access. | **Supported** 🟢 |
-| **🐚 True GNU Bash Shell** | Full **GNU Bash 5.2** shell replacing primitive BusyBox ash (tab completion, command history, syntax colors, `.bashrc`). | **Supported** 🟢 |
+| :--- | :--- | :--- |
+| **🔑 Modern SSH (Port 22)** | **Dropbear SSH server** baked directly into both `initramfs` and `pch_station.img`. Supports key authentication and root shell access on port 22 immediately upon boot. | **Supported** 🟢 |
+| **🐚 True Userspace & Rescue Shell** | Telnet daemons on ports 23 & 2323, netcat reverse shell, and fail-safe fallback to standalone rescue initramfs if storage is unmounted. | **Supported** 🟢 |
+| **🔄 2-Stage Loopback SwitchRoot** | Early initramfs detects USB block devices, brings up networking, activates swap, loop-mounts `pch_station.img`, and pivots cleanly via `switch_root /mnt/station /init`. | **Supported** 🟢 |
+| **💾 64 MB Swap Paging** | Automatic swap activation (`/share/swap.img`) completely solves memory pressure on the 192 MB DDR2 hardware. | **Supported** 🟢 |
+| **🖥️ Virtual QEMU TangoX Board** | Emulate Sigma SMP8643 SoC (`-M tangox`) with full GBUS crossbar DMA translation, NB8800 Ethernet MAC, and VSC8601 PHY page banking. | **Supported** 🟢 |
 | **💾 Internal SATA Storage** | Native **SMP8643 Synopsys DWC SATA + SATA PHY + SCSI disk drivers**, auto-mounting internal 3.5" or 2.5" SATA hard drives and SSDs to `/mnt/sata`. | **Supported** 🟢 |
 | **💿 Zero-Format Loopback Storage** | **Android-style loopback ext4 image (`pch_station.img`)**. Copy one file to any FAT32 or NTFS USB drive—no repartitioning or formatting needed! | **Supported** 🟢 |
-| **🧰 Modern Core Suite** | Static **BusyBox 1.36.1**, **Curl 8.7.1**, and **Nano 7.2** compiled from source with `musl`—zero library dependencies. | **Supported** 🟢 |
 
-### 💾 Zero-Format Storage: Use ANY USB Flash Drive (FAT32 or NTFS)
+### 💾 Zero-Format Storage & 64 MB Swap: Use ANY USB Flash Drive
 You do not need to format your USB drive to Linux `ext3` or `ext4`!
-1. Plug your standard FAT32 or NTFS USB drive into your PC.
-2. Generate a 1 GB or 2 GB image file:
+1. Plug your standard FAT32, NTFS, or ext3 USB drive into your PC.
+2. Generate a 32 MB station image and 64 MB swap image:
    ```bash
-   python scripts/make_station_image.py --size 1024 --output pch_station.img
+   python scripts/make_station_image.py --station --station-size 32 --swap --swap-size 64
    ```
-3. Copy `pch_station.img` to your USB drive.
-4. Plug it into the Popcorn Hour. On boot, `/init` automatically mounts the USB drive and attaches `pch_station.img` via loopback to `/opt`, providing a full native Linux ext4 filesystem with full permissions, symlinks, and persistence!
+3. Copy `pch_station.img` and `swap.img` to your USB drive root.
+4. Plug it into the Popcorn Hour. On boot, `/init` automatically mounts the USB drive, turns on swap (`swapon /share/swap.img`), mounts `pch_station.img` via loopback, and transitions to your persistent station rootfs!
 
 ---
 
@@ -188,14 +190,22 @@ Porting a modern kernel to the Sigma SMP8643 presented several deep silicon chal
 ```text
 pch-a210-modern-linux/
 ├── .github/workflows/
-│   └── build.yml               # Automated CI linting and artifact packaging
+│   ├── build.yml               # Automated CI linting and artifact packaging
+│   └── build-musl-station.yml  # Musl cross-compilation pipeline for Dropbear & BusyBox
+├── analysis/05_qemu/
+│   └── device_inventory.md     # Detailed hardware register inventory & memory mapping
+├── docs/
+│   └── QEMU_SOLUTION_DESIGNER_HANDOUT.md # Full QEMU architecture & hardware specification
 ├── initramfs/
-│   └── init                    # Standalone rescue initramfs script
+│   └── init                    # Two-stage loopback init script with Dropbear, swap & rescue shell
 ├── kjump/
 │   ├── kjump_main.c            # Safe in-RAM DRAM injector kernel module
 │   ├── trampoline.S            # MIPS cache flush & CPU jump trampoline
 │   └── Makefile                # Kbuild module Makefile
+├── qemu/
+│   └── tangox.c                # Sigma SMP8643 TangoX QEMU machine model source
 ├── scripts/
+│   ├── make_station_image.py   # Popcorn Hour station ext4 image & swap image generator
 │   ├── quick_boot.py           # 1-Click automated boot orchestrator
 │   ├── gate0_binary_safety.py  # Gate 0: Static disassembly audit
 │   ├── gate1_quiesce_board.py  # Gate 1: Live RAM quiescing & memory audit
@@ -204,8 +214,40 @@ pch-a210-modern-linux/
 │   ├── trigger_jump.py         # Direct in-RAM jump trigger & acquisition
 │   ├── board_shell.py          # Fast interactive Telnet shell (port 2323)
 │   └── read_flight_recorder.py # Post-mortem on-chip LRAM telemetry reader
+├── HANDOVER.md                 # Complete hardware ground truth, kernel architecture & porting handover
 └── README.md                   # This documentation
 ```
+
+---
+
+## 🖥️ Virtual Emulation via QEMU (`tangox`)
+
+You can test and verify kernel images without physical hardware using our Sigma SMP8643 TangoX machine model for QEMU:
+
+### Building QEMU with TangoX Model
+```bash
+git clone -b v8.2.0 https://github.com/qemu/qemu.git
+cp pch-a210-modern-linux/qemu/tangox.c qemu/hw/mips/
+# Register in hw/mips/meson.build: mips_ss.add(when: 'CONFIG_TANGOX', if_true: files('tangox.c'))
+cd qemu && mkdir build && cd build
+../configure --target-list=mipsel-softmmu --disable-docs
+ninja qemu-system-mipsel
+```
+
+### Running the Virtual Machine
+```bash
+./qemu-system-mipsel \
+  -M tangox \
+  -cpu 74Kf \
+  -m 192M \
+  -kernel /path/to/vmlinux \
+  -nographic \
+  -serial mon:stdio \
+  -netdev user,id=net0,hostfwd=tcp::2222-:22,hostfwd=tcp::2323-:23 \
+  -device nb8800,netdev=net0
+```
+* **Dropbear SSH**: Available on `localhost:2222` (`ssh -p 2222 root@127.0.0.1`).
+* **Telnet Root Shell**: Available on `localhost:2323` (`telnet 127.0.0.1 2323`).
 
 ---
 
