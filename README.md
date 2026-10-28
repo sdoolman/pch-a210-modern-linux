@@ -135,6 +135,30 @@ If you prefer to inspect every step over Telnet:
 
 ---
 
+### 🚨 Out-of-Band (OOB) Rescue via Port 8008 (Dead Telnet / Unmounted `/dev/pts`)
+
+On factory Syabas firmware cold boot, vendor `telnetd` (port 23) frequently hangs:
+* **The Root Cause:** Factory Syabas firmware does not mount `/dev/pts` on boot, causing vendor `telnetd` pseudo-terminal (`openpty()`) allocation to block forever in TCP `Recv-Q` (SYN-ACK establishes, but 0 bytes returned).
+* **The OOB Solution:** Port 8008 (theDavidBox Command Server XML API in `syb_framework`) is always listening and provides root command injection:
+  ```http
+  GET /system?arg0=insert_key&arg1=<urlencoded_command>&arg2=4896
+  ```
+* **Instant 1-Second Shell Restoration:**
+  Use [`scripts/launch_telnetd.py`](scripts/launch_telnetd.py) or execute via `curl`:
+  ```bash
+  # 1. Mount devpts
+  curl "http://192.168.1.4:8008/system?arg0=insert_key&arg1=mkdir%20-p%20/dev/pts%20%26%26%20mount%20-t%20devpts%20devpts%20/dev/pts&arg2=4896"
+
+  # 2. Symlink /share to USB drive
+  curl "http://192.168.1.4:8008/system?arg0=insert_key&arg1=for%20d%20in%20/opt/sybhttpd/localhost.drives/USB_DRIVE*%3B%20do%20%5B%20-d%20%22%24d%22%20%5D%20%26%26%20ln%20-sf%20%22%24d%22%20/share%20%26%26%20break%3B%20done&arg2=4896"
+
+  # 3. Spawn clean static BusyBox telnetd on port 2323
+  curl "http://192.168.1.4:8008/system?arg0=insert_key&arg1=/share/busybox_stock%20telnetd%20-p%202323%20-l%20/bin/sh%20-b%200.0.0.0%20%26&arg2=4896"
+  ```
+  Immediately connects to a full root shell on port 2323 without touching power cables!
+
+---
+
 ## 🛡️ The 4-Gate Safety Framework (Zero Bricks Guarantee)
 
 To guarantee that the physical board can never be bricked by wrong writes, illegal instructions, or hung resets, every deployment passes 4 mandatory safety gates:
